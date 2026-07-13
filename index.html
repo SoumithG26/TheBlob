@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soft Body Blob Demo</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1e1e2f 0%, #10101c 100%);
+            font-family: sans-serif;
+            touch-action: none; /* Prevent scrolling on touch */
+        }
+        canvas {
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            pointer-events: none;
+            user-select: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">Click/Tap near the edge to grab and drag.<br>Click in the center to poke!</div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let width, height;
+        let points = [];
+        let springs = [];
+        let centerPoint;
+        
+        // Physics constants
+        const NUM_POINTS = 30;
+        const BASE_RADIUS = 150;
+        const STIFFNESS_OUTER = 0.08;
+        const STIFFNESS_RADIAL = 0.04;
+        const FRICTION = 0.85; // Lower number = more damped/less jiggly
+        
+        // Interaction variables
+        let mouse = { x: -1000, y: -1000, isDown: false };
+        let draggedPoint = null;
+        let time = 0;
+
+        class Point {
+            constructor(x, y, isCenter = false) {
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 0;
+                this.isCenter = isCenter;
+            }
+
+            update() {
+                // Apply global friction
+                this.vx *= FRICTION;
+                this.vy *= FRICTION;
+                
+                // Update position
+                this.x += this.vx;
+                this.y += this.vy;
+            }
+        }
+
+        class Spring {
+            constructor(p1, p2, restLength, stiffness) {
+                this.p1 = p1;
+                this.p2 = p2;
+                this.baseRestLength = restLength;
+                this.restLength = restLength;
+                this.stiffness = stiffness;
+            }
+
+            update() {
+                const dx = this.p2.x - this.p1.x;
+                const dy = this.p2.y - this.p1.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+                
+                // Hooke's Law: F = -k * x
+                const force = (dist - this.restLength) * this.stiffness;
+                const fx = (dx / dist) * force;
+                const fy = (dy / dist) * force;
+
+                // Apply forces (equal and opposite)
+                this.p1.vx += fx;
+                this.p1.vy += fy;
+                
+                // Keep the center point somewhat anchored but allow it to move a bit
+                if (!this.p2.isCenter) {
+                    this.p2.vx -= fx;
+                    this.p2.vy -= fy;
+                } else {
+                    // Center point takes less force so it acts as an anchor
+                    this.p2.vx -= fx * 0.1;
+                    this.p2.vy -= fy * 0.1;
+                }
+            }
+        }
+
+        function init() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+
+            points = [];
+            springs = [];
+            
+            const centerX = width / 2;
+            const centerY = height / 2;
+
+            // Center node
+            centerPoint = new Point(centerX, centerY, true);
+            
+            // Generate perimeter points
+            const angleStep = (Math.PI * 2) / NUM_POINTS;
+            const outerSpringLength = Math.sqrt(2 * BASE_RADIUS * BASE_RADIUS * (1 - Math.cos(angleStep)));
+
+            for (let i = 0; i < NUM_POINTS; i++) {
+                const angle = i * angleStep;
+                const x = centerX + Math.cos(angle) * BASE_RADIUS;
+                const y = centerY + Math.sin(angle) * BASE_RADIUS;
+                points.push(new Point(x, y));
+            }
+
+            // Connect springs
+            for (let i = 0; i < NUM_POINTS; i++) {
+                const current = points[i];
+                const next = points[(i + 1) % NUM_POINTS];
+                
+                // Perimeter spring (connects to neighbor)
+                springs.push(new Spring(current, next, outerSpringLength, STIFFNESS_OUTER));
+                
+                // Radial spring (connects to center)
+                springs.push(new Spring(current, centerPoint, BASE_RADIUS, STIFFNESS_RADIAL));
+            }
+        }
+
+        function drawBlob() {
+            ctx.clearRect(0, 0, width, height);
+
+            ctx.beginPath();
+            
+            // Draw a smooth bezier curve through the midpoints of the outer points
+            let xc1 = (points[0].x + points[NUM_POINTS - 1].x) / 2;
+            let yc1 = (points[0].y + points[NUM_POINTS - 1].y) / 2;
+            ctx.moveTo(xc1, yc1);
+
+            for (let i = 0; i < NUM_POINTS; i++) {
+                const nextPoint = points[(i + 1) % NUM_POINTS];
+                const xc = (points[i].x + nextPoint.x) / 2;
+                const yc = (points[i].y + nextPoint.y) / 2;
+                ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
+            }
+
+            // Styling the blob
+            const gradient = ctx.createRadialGradient(
+                centerPoint.x, centerPoint.y - 50, 0,
+                centerPoint.x, centerPoint.y, BASE_RADIUS * 1.5
+            );
+            gradient.addColorStop(0, '#ff6b81');
+            gradient.addColorStop(1, '#ff4757');
+
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#ff3344';
+            ctx.stroke();
+
+            // Optional: draw highlights to make it look 3D and jelly-like
+            ctx.beginPath();
+            ctx.arc(centerPoint.x - BASE_RADIUS * 0.3, centerPoint.y - BASE_RADIUS * 0.3, BASE_RADIUS * 0.15, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fill();
+        }
+
+        function animate() {
+            time += 0.05;
+
+            // 1. "Breathing" animation 
+            // Modifies the radial spring rest lengths gently over time
+            const breathOffset = Math.sin(time) * 10;
+            springs.forEach(spring => {
+                if (spring.p2 === centerPoint || spring.p1 === centerPoint) {
+                    spring.restLength = spring.baseRestLength + breathOffset;
+                }
+            });
+
+            // 2. Mouse Dragging
+            if (mouse.isDown && draggedPoint) {
+                // Apply a strong force toward the mouse instead of snapping hard to position
+                // This preserves the stretchy, jiggly feel
+                const dx = mouse.x - draggedPoint.x;
+                const dy = mouse.y - draggedPoint.y;
+                draggedPoint.vx += dx * 0.2;
+                draggedPoint.vy += dy * 0.2;
+            }
+
+            // 3. Anchor the center point to the middle of the screen loosely
+            const dxCenter = (width / 2) - centerPoint.x;
+            const dyCenter = (height / 2) - centerPoint.y;
+            centerPoint.vx += dxCenter * 0.02;
+            centerPoint.vy += dyCenter * 0.02;
+
+            // 4. Update Physics
+            springs.forEach(spring => spring.update());
+            points.forEach(point => point.update());
+            centerPoint.update();
+
+            // 5. Render
+            drawBlob();
+
+            requestAnimationFrame(animate);
+        }
+
+        // --- Interaction Handling ---
+        
+        function handlePointerDown(e) {
+            mouse.isDown = true;
+            updateMousePos(e);
+
+            // Find closest point
+            let closestDist = Infinity;
+            let closest = null;
+            
+            points.forEach(point => {
+                const dist = Math.hypot(point.x - mouse.x, point.y - mouse.y);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closest = point;
+                }
+            });
+
+            // If close enough to an edge, grab it
+            if (closestDist < 60) {
+                draggedPoint = closest;
+            } else {
+                // Otherwise, perform a "poke" force outward from the click
+                const centerDist = Math.hypot(centerPoint.x - mouse.x, centerPoint.y - mouse.y);
+                if (centerDist < BASE_RADIUS) {
+                    points.forEach(point => {
+                        const dx = point.x - mouse.x;
+                        const dy = point.y - mouse.y;
+                        const dist = Math.hypot(dx, dy);
+                        if (dist > 0 && dist < BASE_RADIUS * 1.5) {
+                            // Apply repulsive force
+                            const force = (BASE_RADIUS * 1.5 - dist) * 0.15;
+                            point.vx += (dx / dist) * force;
+                            point.vy += (dy / dist) * force;
+                        }
+                    });
+                }
+            }
+        }
+
+        function handlePointerMove(e) {
+            if (mouse.isDown) {
+                updateMousePos(e);
+            }
+        }
+
+        function handlePointerUp() {
+            mouse.isDown = false;
+            draggedPoint = null;
+        }
+
+        function updateMousePos(e) {
+            if (e.touches && e.touches.length > 0) {
+                mouse.x = e.touches[0].clientX;
+                mouse.y = e.touches[0].clientY;
+            } else {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        });
+
+        // Mouse Events
+        window.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', handlePointerUp);
+        
+        // Touch Events
+        window.addEventListener('touchstart', handlePointerDown, {passive: false});
+        window.addEventListener('touchmove', handlePointerMove, {passive: false});
+        window.addEventListener('touchend', handlePointerUp);
+
+        // Start
+        init();
+        animate();
+    </script>
+</body>
+</html>
